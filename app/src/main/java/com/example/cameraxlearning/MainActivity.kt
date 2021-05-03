@@ -7,19 +7,15 @@ import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.Preview
-import androidx.camera.core.impl.ImageCaptureConfig
+import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.android.synthetic.main.activity_main.*
 import java.io.File
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -33,6 +29,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        camera_capture_button.setOnClickListener { takePhoto() }
+        outputDirectory = getOutputDirectory()
+        cameraExecutor = Executors.newSingleThreadExecutor()
 
         if (allPermissionGranted()) {
             startCamera()
@@ -43,9 +42,6 @@ class MainActivity : AppCompatActivity() {
                     REQUEST_CODE_PERMISSION_CAMERA
             )
         }
-        camera_capture_button.setOnClickListener { takePhoto() }
-        outputDirectory = getOutputDirectory()
-        cameraExecutor = Executors.newSingleThreadExecutor()
     }
 
     private fun getOutputDirectory(): File {
@@ -85,8 +81,15 @@ class MainActivity : AppCompatActivity() {
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         imageCapture = ImageCapture.Builder().build()
+        val imageAnalyzer = ImageAnalysis.Builder()
+                .build()
+                .also {
+                    it.setAnalyzer(cameraExecutor, LuminosityAnalyzer { luma ->
+                        Log.d(TAG, "Average Luminosity: $luma")
+                    })
+                }
 
-        cameraProviderFuture.addListener(Runnable {
+        cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
             val preview = Preview.Builder()
@@ -97,7 +100,7 @@ class MainActivity : AppCompatActivity() {
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
+                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, imageAnalyzer)
             } catch (e: Exception) {
                 Log.e(TAG, "Use case binding failed", e)
             }
@@ -131,3 +134,48 @@ class MainActivity : AppCompatActivity() {
         private val REQUIRED_PERMISSION = arrayOf(Manifest.permission.CAMERA)
     }
 }
+
+class LuminosityAnalyzer(
+        private val listener: (Double) -> Unit
+) : ImageAnalysis.Analyzer {
+
+    private fun ByteBuffer.toByteArray(): ByteArray {
+        rewind()
+        val data = ByteArray(remaining())
+        get(data)
+        return data
+    }
+
+    override fun analyze(image: ImageProxy) {
+        val buffer = image.planes[0].buffer
+        val data = buffer.toByteArray()
+        val pixels = data.map { it.toInt() and 0xFF }
+        val luma = pixels.average()
+        listener(luma)
+
+        image.close()
+    }
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
